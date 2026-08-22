@@ -1,0 +1,40 @@
+# Git files
+.git
+.gitignore
+.gitkeep
+.gitattributes
+
+# GitHub
+.github
+CONTRIBUTING.md
+CHANGELOG.md
+CHANGELOG-*.md
+
+# Documentation
+*.md
+README.md
+SECURITY.md
+DOCKER.md
+
+# Licenses
+LICENSE
+LICENSE.txt
+
+# Development files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files
+test
+tests
+*.test
+
+# CI/CD artifacts
+.env
+.env.local
+.coverage
+.pytest_cache

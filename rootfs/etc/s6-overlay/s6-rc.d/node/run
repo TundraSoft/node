@@ -1,0 +1,46 @@
+#!/usr/bin/with-contenv sh
+cd /app
+
+# Runs a package.json SCRIPT, a FILE, or a demo fallback. Node has no permission
+# system, so there are no ALLOW_* flags. WATCH=1 -> `node --watch` (FILE and
+# fallback modes only: `npm run` does not forward runtime flags to node, so put
+# --watch in the script itself). DEBUG=1 enables shell tracing.
+RELOAD_ARG=""
+if [ "$WATCH" = "1" ]; then
+  RELOAD_ARG="--watch"
+fi
+
+if [ "$DEBUG" = "1" ]; then
+  echo "[DEBUG] Node Debug Mode enabled"
+  echo "[DEBUG] SCRIPT: $SCRIPT"
+  echo "[DEBUG] FILE: $FILE"
+  echo "[DEBUG] RELOAD_ARG: $RELOAD_ARG"
+  set -x
+fi
+
+# SCRIPT mode
+if [ ! -z "$SCRIPT" ]; then
+  [ -n "$RELOAD_ARG" ] && echo "Warning: WATCH=1 is ignored in SCRIPT mode; add --watch to the '$SCRIPT' script in package.json instead"
+  exec s6-setuidgid tundra npm run "$SCRIPT"
+
+# FILE mode
+elif [ ! -z "$FILE" ]; then
+  exec s6-setuidgid tundra node $RELOAD_ARG "$FILE"
+
+# Fallback: demo app
+else
+  cat << 'EOF' > /app/app.js
+const http = require("node:http");
+
+const port = Number(process.env.PORT ?? 8080);
+
+http
+  .createServer((_req, res) => {
+    res.end("Welcome to Node 🟢\n");
+  })
+  .listen(port, "0.0.0.0", () => {
+    console.log(`Welcome to Node 🟢 — listening on http://0.0.0.0:${port}`);
+  });
+EOF
+  exec s6-setuidgid tundra node $RELOAD_ARG /app/app.js
+fi

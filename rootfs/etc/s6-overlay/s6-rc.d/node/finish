@@ -1,0 +1,36 @@
+#!/usr/bin/with-contenv sh
+
+# ============================================================================
+# Node Service Finish Script
+# ============================================================================
+# Purpose:
+#   Handles graceful shutdown of the Node service when the container stops.
+#   Allows proper cleanup and resource release before service termination.
+#
+# Behavior:
+#   - Receives EXIT_CODE from S6 indicating why the service is stopping
+#   - 0 = normal exit or requested stop
+#   - Other values = unexpected crash or error
+#
+# Exit Codes:
+#   0 - Graceful shutdown completed
+#   Non-zero - Indicates finish script itself failed (S6 will restart service)
+#
+# Used By:
+#   - S6 overlay service supervision system
+#   - Container shutdown sequence
+# ============================================================================
+
+EXIT_CODE=${1:-0}
+
+# Log finish script execution
+if [ $EXIT_CODE -eq 0 ]; then
+  echo "[node] Service stopping gracefully (exit code: $EXIT_CODE)"
+else
+  echo "[node] Service crashed or stopped unexpectedly (exit code: $EXIT_CODE)"
+fi
+
+# Perform any cleanup operations here
+# Example: signal handlers, resource cleanup, etc.
+
+exit 0

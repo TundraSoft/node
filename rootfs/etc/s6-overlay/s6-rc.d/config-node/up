@@ -1,0 +1,2 @@
+#!/bin/execlineb -P
+/etc/s6-overlay/s6-rc.d/config-node/run

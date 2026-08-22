@@ -1,0 +1,326 @@
+name: Build and Test Docker Image
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+on:
+  push:
+    paths-ignore:
+      - .dockerignore
+      - .gitignore
+      - .github/ISSUE_TEMPLATE/*
+      - .github/PULL_REQUEST_TEMPLATE*
+      - ./README.md
+      - ./LICENSE
+    # Ignore CI if commit message contains '[skip ci]' (e.g., from update-readme chore)
+    # This is a GitHub Actions convention, not a YAML field, so we use a job-level if below
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Weekly builds on Sundays at midnight UTC to catch latest Alpine/Node patches
+    -
+      cron: '0 0 * * 0'
+
+jobs:
+
+  setup:
+    if: |
+      !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    outputs:
+      alpine-branches: ${{ steps.alpine-versions.outputs.alpine-branches }}
+      latest-alpine-branch: ${{ steps.alpine-versions.outputs.latest-alpine-branch }}
+      node-versions: ${{ steps.node-versions.outputs.node-versions }}
+      latest-node-version: ${{ steps.node-versions.outputs.latest-node-version }}
+    
+    steps:
+      - 
+        name: Get Alpine Versions
+        id: alpine-versions
+        run: |
+          LATEST_VERSION=$(curl -s https://cz.alpinelinux.org/alpine/latest-stable/releases/x86_64/latest-releases.yaml | awk '/branch:/ {print $2; exit}' | sed 's/v//')
+          ALPINE_BRANCHES="edge "
+          LIMIT=3
+          ALL_BRANCHES=$(curl -s https://cz.alpinelinux.org/alpine/ | grep -oP '(?<=v)[^/]+(?=/")' | sort -V | tail -n 6 | tac)
+          for BRANCH in $ALL_BRANCHES
+          do
+            if curl --output /dev/null --silent --head --fail "https://cz.alpinelinux.org/alpine/v${BRANCH}/releases/";
+            then
+              ALPINE_BRANCHES+="${BRANCH} "
+              LIMIT=$((LIMIT-1))
+            fi
+            if [ $LIMIT -le 0 ]; then
+              break
+            fi
+          done
+          ALPINE_BRANCHES=$(echo $ALPINE_BRANCHES | tr ' ' '\n' | jq -Rcn '[inputs] | sort | reverse')
+          echo "alpine-branches=${ALPINE_BRANCHES}" >> "$GITHUB_OUTPUT"
+          echo "latest-alpine-branch=${LATEST_VERSION}" >> "$GITHUB_OUTPUT"
+          
+      - 
+        name: Get Node Versions
+        id: node-versions
+        run: |
+          # nodejs.org/dist/index.json is newest-first; keep the 5 newest LTS releases.
+          NODE_VERSIONS=$(curl -s https://nodejs.org/dist/index.json | jq -r '[.[] | select(.lts != false) | .version] | .[0:5] | .[] | ltrimstr("v")' | jq -Rcn '[inputs]')
+          LATEST_VERSION=$(echo $NODE_VERSIONS | tr ' ' '\n' | jq -r '.[0]')
+          echo "node-versions=${NODE_VERSIONS}" >> "$GITHUB_OUTPUT"
+          echo "latest-node-version=${LATEST_VERSION}" >> "$GITHUB_OUTPUT"
+      
+  build:
+    needs: setup
+    runs-on: ubuntu-latest
+      
+    strategy:
+      fail-fast: false
+      matrix:
+        alpine-branch: ${{ fromJson(needs.setup.outputs.alpine-branches) }}
+        node-version: ${{ fromJson(needs.setup.outputs.node-versions) }}
+    
+    env:
+      TEST_TAG: node
+    
+    steps:
+    - 
+      uses: actions/checkout@v6
+    
+    - 
+      name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+    
+    -
+      name: Get the ALPINE VERSION
+      run: |
+        echo "ALPINE_VERSION=$(curl -s https://cz.alpinelinux.org/alpine/${{ matrix.alpine-branch }}/releases/x86_64/latest-releases.yaml | awk '/version:/ {print $2; exit}')" >> $GITHUB_ENV
+    
+    - 
+      name: Extract Docker Metadata
+      id: meta
+      uses: docker/metadata-action@v6
+      with:
+        flavor: |
+          latest=false
+        images: |
+          name=${{ github.repository }},enable=true
+          name=ghcr.io/${{ github.repository }},enable=true
+        labels: |
+          org.opencontainers.image.source=${{ github.repositoryUrl }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.created=${{ github.event.repository.pushed_at }}
+          org.opencontainers.image.authors=${{ github.actor }}
+          org.opencontainers.image.branch=${{ github.ref_name }}
+          org.opencontainers.image.version=${{ matrix.node-version }}
+          org.opencontainers.image.vendor=Tundrasoft
+          org.opencontainers.image.licenses=MIT
+          org.opencontainers.image.documentation=${{ github.repositoryUrl }}/blob/main/README.md
+          org.opencontainers.image.description=Node.js on Alpine Linux
+          org.opencontainers.image.title=Node.js on Alpine Linux
+        tags: |
+          type=raw,prefix=,value=latest,enable=${{ ( matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && matrix.node-version == needs.setup.outputs.latest-node-version && github.ref_name == github.event.repository.default_branch) }}
+          # Version
+          type=semver,pattern={{major}}.{{minor}}.{{patch}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && github.ref_name == github.event.repository.default_branch }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && matrix.node-version == needs.setup.outputs.latest-node-version && github.ref_name == github.event.repository.default_branch }}
+          type=semver,pattern={{major}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && matrix.node-version == needs.setup.outputs.latest-node-version && github.ref_name == github.event.repository.default_branch }}
+          # Version with alpine prefix
+          type=semver,prefix=${{ format('alpine-{0}-', matrix.alpine-branch) }},pattern={{major}}.{{minor}}.{{patch}},value=${{ matrix.node-version }},enable=${{ github.ref_name == github.event.repository.default_branch }}
+          
+          # Version with branch
+          type=semver,prefix=${{ format('{0}-', github.ref_name)}},pattern={{major}}.{{minor}}.{{patch}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch != 'edge' && matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && github.ref_name != github.event.repository.default_branch }}
+          type=semver,prefix=${{ format('{0}-', github.ref_name)}},pattern={{major}}.{{minor}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch != 'edge' && matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && github.ref_name != github.event.repository.default_branch }}
+          type=semver,prefix=${{ format('{0}-', github.ref_name)}},pattern={{major}}.{{minor}},value=${{ matrix.node-version }},enable=${{ matrix.alpine-branch != 'edge' && matrix.alpine-branch == needs.setup.outputs.latest-alpine-branch && github.ref_name != github.event.repository.default_branch }}
+          # Version with branch and alpine prefix
+          type=semver,prefix=${{ format('{0}-alpine-{1}-', github.ref_name, matrix.alpine-branch) }},pattern={{major}}.{{minor}}.{{patch}},value=${{ matrix.node-version }},enable=${{ github.ref_name != github.event.repository.default_branch }}
+
+    - 
+      name: Build Test Image
+      id: build-image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        load: true
+        tags: ${{ env.TEST_TAG }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          ALPINE_VERSION=${{ matrix.alpine-branch }}
+          NODE_VERSION=${{ matrix.node-version }}
+    
+    -
+      name: Test Image
+      run: ./tests/smoke.sh "${{ env.TEST_TAG }}" "${{ matrix.node-version }}"
+    
+    -
+      name: Login to DockerHub
+      if: github.ref_name == github.event.repository.default_branch
+      uses: docker/login-action@v4
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    -
+      name: Login to GHCR
+      if: github.ref_name == github.event.repository.default_branch
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - 
+      name: Build and Push
+      id: build-push
+      if: github.ref_name == github.event.repository.default_branch
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        push: true
+        # Build matrix optimization:
+        # - Edge Alpine: amd64 only (QEMU trigger issues on arm)
+        # - Stable versions: amd64, arm64 only (Node.js does not provide armv7 binaries)
+        platforms: ${{ matrix.alpine-branch == 'edge' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+        provenance: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          ALPINE_VERSION=${{ matrix.alpine-branch }}
+          NODE_VERSION=${{ matrix.node-version }}
+
+    -
+      name: Build summary
+      if: github.ref_name == github.event.repository.default_branch
+      run: echo "Pushed Node ${{ matrix.node-version }} on Alpine ${{ matrix.alpine-branch }}" >> $GITHUB_STEP_SUMMARY
+
+  # Stable-named required check; passes iff the (churning) build matrix passed.
+  ci-gate:
+    name: ci-gate
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the build matrix to have passed
+        run: |
+          echo "build matrix result: ${{ needs.build.result }}"
+          [ "${{ needs.build.result }}" = "failure" ] && exit 1 || exit 0
+
+  # Lets do a few chores
+  update-readme:
+    needs: [setup, build]
+    if: github.ref_name == github.event.repository.default_branch || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # admin PAT to bypass the branch ruleset on the CHANGELOG/README push
+          token: ${{ secrets.GIT_HUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r .github/scripts/requirements.txt
+      
+      - name: Update README with new tags
+        run: |
+          # Use the Node versions that were actually built
+          NODE_VERSIONS='${{ needs.setup.outputs.node-versions }}'
+          echo "Processing Node versions that were built: $NODE_VERSIONS"
+          
+          # Convert JSON array to bash array
+          VERSIONS=$(echo "$NODE_VERSIONS" | jq -r '.[]')
+          
+          # Process each version that was built
+          for VERSION in $VERSIONS; do
+            echo "Updating README with successfully built Node version: $VERSION"
+            python .github/scripts/update_readme_tags.py README.md "$VERSION" "${{ github.repository }}"
+          done
+      
+      # - name: Generate Docker Hub README
+      #   run: |
+      #     echo "Generating DOCKER.md for Docker Hub..."
+      #     python .github/scripts/generate_docker_readme.py \
+      #       README.md \
+      #       DOCKER.md \
+      #       '${{ needs.setup.outputs.node-versions }}' \
+      #       '${{ github.repository }}' \
+      #       '${{ github.repository }}' \
+      #       '${{ needs.setup.outputs.alpine-branches }}' \
+      #       'description:DESCRIPTION-START,DESCRIPTION-END;env-vars:ENV-VARS-START,ENV-VARS-END;build-args:BUILD-ARGS-START,BUILD-ARGS-END'
+      
+      - name: Update CHANGELOG from PR (on pull_request merge)
+        if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+        run: |
+          echo "Processing merged PR for changelog..."
+          
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          REPO="${{ github.repository }}"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          
+          echo "PR Title: $PR_TITLE"
+          echo "PR Number: $PR_NUMBER"
+          echo "PR Author: $PR_AUTHOR"
+          echo "Processing all commits from PR..."
+          
+          # Call the Python script to update changelog with all PR commits
+          python .github/scripts/update_changelog.py CHANGELOG.md "$PR_TITLE" "$PR_NUMBER" "$REPO" "$PR_AUTHOR" "$BASE_SHA" "$HEAD_SHA"
+      
+      - name: Update CHANGELOG from commits (on main branch push)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "Processing commits for changelog..."
+          
+          # Get the last commit message from the push
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          COMMIT_HASH=$(git log -1 --pretty=%h)
+          COMMIT_AUTHOR=$(git log -1 --pretty=%an | sed 's/ /_/g')
+          
+          # Only process if commit message contains conventional commit prefix
+          if echo "$COMMIT_MSG" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|security)'; then
+            echo "Processing commit: $COMMIT_MSG"
+            
+            # For commits, we need to extract the message differently
+            COMMIT_TITLE=$(echo "$COMMIT_MSG" | head -1)
+            REPO="${{ github.repository }}"
+            
+            # Create a changelog entry for the commit
+            python .github/scripts/update_changelog.py CHANGELOG.md "$COMMIT_TITLE" "0" "$REPO" "$COMMIT_AUTHOR"
+          fi
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: Update README and CHANGELOG [skip ci]"
+            git push origin ${{ github.ref_name }}
+          fi
+  
+  chore:
+    needs: build
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - 
+        uses: actions/checkout@v6
+      -
+        name: Update repo description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: ${{ github.repository }}
+

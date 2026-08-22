@@ -1,0 +1,6 @@
+# CVEs to ignore in the container scan. One id per line, each with a comment
+# stating why it's accepted and a re-review date. Prefer rebuilding (which picks
+# up patched packages) over ignoring.
+#
+#   # CVE-2024-12345: no upstream fix in Alpine yet. Re-review by: 2026-09-01
+#   CVE-2024-12345

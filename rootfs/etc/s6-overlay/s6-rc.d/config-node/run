@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv sh
+
+NPMCACHE=${NPM_CONFIG_CACHE:-'/npm-cache'}
+
+mkdir -p ${NPMCACHE}
+
+setgroup ${NPMCACHE} /app
