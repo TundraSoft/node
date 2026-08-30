@@ -81,6 +81,7 @@ With no `FILE` or `SCRIPT` set, the container runs a small built-in demo server 
 |---------|------|
 | [latest](https://hub.docker.com/r/tundrasoft/node/tags?name=latest) | Latest stable release |
 | [edge](https://hub.docker.com/r/tundrasoft/node/tags?name=edge) | Edge/development version |
+| [24.20](https://hub.docker.com/r/tundrasoft/node/tags?name=24.20) | [24.20.0](https://hub.docker.com/r/tundrasoft/node/tags?name=24.20.0) |
 | [24.19](https://hub.docker.com/r/tundrasoft/node/tags?name=24.19) | [24.19.0](https://hub.docker.com/r/tundrasoft/node/tags?name=24.19.0) |
 | [24.18](https://hub.docker.com/r/tundrasoft/node/tags?name=24.18) | [24.18.1](https://hub.docker.com/r/tundrasoft/node/tags?name=24.18.1), [24.18.0](https://hub.docker.com/r/tundrasoft/node/tags?name=24.18.0) |
 | [24.17](https://hub.docker.com/r/tundrasoft/node/tags?name=24.17) | [24.17.0](https://hub.docker.com/r/tundrasoft/node/tags?name=24.17.0) |
